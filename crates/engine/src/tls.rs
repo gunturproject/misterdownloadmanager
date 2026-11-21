@@ -34,6 +34,15 @@ pub fn system_has_roots() -> bool {
     if FOUND.load(Ordering::Relaxed) {
         return true;
     }
+    #[cfg(target_os = "android")]
+    {
+        // The JNI bridge initializes rustls-platform-verifier before any engine
+        // client is built. Probing Verifier::new here first would leave the
+        // verifier uninitialized on Android and make every HTTPS download take
+        // the no-roots path.
+        FOUND.store(true, Ordering::Relaxed);
+        return true;
+    }
     let found = rustls_platform_verifier::Verifier::new(provider()).is_ok();
     if found {
         FOUND.store(true, Ordering::Relaxed);
