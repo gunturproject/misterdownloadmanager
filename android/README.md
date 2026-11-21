@@ -20,8 +20,8 @@ not part of this port yet.
 
 ## Building
 
-The GitHub Actions workflow `.github/workflows/android.yml` builds the three
-native libraries with `cargo-ndk`, then assembles `app-debug.apk` with Gradle and
+The `android apk` job in `.github/workflows/ci.yml` builds the three native
+libraries with `cargo-ndk`, then assembles `app-debug.apk` with Gradle and
 uploads it as an artifact.
 
 To build locally you need the Android SDK (platform 35, build tools 35, NDK
