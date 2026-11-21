@@ -89,11 +89,13 @@ impl AndroidEngine {
             return Err("only http and https links are supported in this build".to_owned());
         }
 
-        let mut opts = Options::default();
-        opts.max_connections = connections.clamp(1, 16) as u32;
-        opts.automatic_agent = false;
-        opts.user_agent = USER_AGENT.to_owned();
-        opts.save_interval = Duration::from_secs(1);
+        let opts = Options {
+            max_connections: connections.clamp(1, 16) as u32,
+            automatic_agent: false,
+            user_agent: USER_AGENT.to_owned(),
+            save_interval: Duration::from_secs(1),
+            ..Default::default()
+        };
 
         let req = Request {
             url: parsed,
@@ -185,13 +187,7 @@ fn emit_progress(vm: &JavaVM, store: &Mutex<StateStore>, id: i64, snap: &Snapsho
     });
 }
 
-fn emit_finished(
-    vm: &JavaVM,
-    cb: Arc<Global<JObject<'static>>>,
-    id: i64,
-    path: &Path,
-    size: u64,
-) {
+fn emit_finished(vm: &JavaVM, cb: Arc<Global<JObject<'static>>>, id: i64, path: &Path, size: u64) {
     let path = path.to_string_lossy().into_owned();
     let _ = vm.attach_current_thread(move |env| -> jni::errors::Result<()> {
         let path = env.new_string(path)?;
