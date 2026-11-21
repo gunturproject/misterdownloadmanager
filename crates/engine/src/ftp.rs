@@ -30,6 +30,7 @@ use base64::Engine;
 use bytes::{Bytes, BytesMut};
 use percent_encoding::percent_decode_str;
 use reqwest::header::{AUTHORIZATION, HeaderMap};
+#[cfg(not(target_os = "android"))]
 use rustls::pki_types::CertificateDer;
 use suppaftp::tokio::{
     AsyncRustlsConnector, AsyncRustlsFtpStream, AsyncRustlsStream, TransferStream,
@@ -562,9 +563,15 @@ pub(crate) fn client_config(extra: &[Vec<u8>]) -> Result<rustls::ClientConfig, r
         return Ok(crate::tls::no_roots_config());
     }
     let provider = crate::tls::provider();
+    // Android's platform verifier has no extra-roots constructor: it delegates
+    // trust decisions to the system store (the JNI bridge initializes it).
+    #[cfg(not(target_os = "android"))]
     let extra = extra.iter().map(|c| CertificateDer::from(c.clone()));
+    #[cfg(not(target_os = "android"))]
     let verifier =
         Verifier::new_with_extra_roots(crate::tls::mozilla_roots().chain(extra), provider.clone())?;
+    #[cfg(target_os = "android")]
+    let verifier = Verifier::new(provider.clone())?;
     Ok(rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .dangerous()

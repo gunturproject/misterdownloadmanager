@@ -41,13 +41,16 @@ pub fn system_has_roots() -> bool {
         // verifier uninitialized on Android and make every HTTPS download take
         // the no-roots path.
         FOUND.store(true, Ordering::Relaxed);
-        return true;
+        true
     }
-    let found = rustls_platform_verifier::Verifier::new(provider()).is_ok();
-    if found {
-        FOUND.store(true, Ordering::Relaxed);
+    #[cfg(not(target_os = "android"))]
+    {
+        let found = rustls_platform_verifier::Verifier::new(provider()).is_ok();
+        if found {
+            FOUND.store(true, Ordering::Relaxed);
+        }
+        found
     }
-    found
 }
 
 /// Mozilla's trusted root certificates (CCADB's list for websites, as Firefox carries it:

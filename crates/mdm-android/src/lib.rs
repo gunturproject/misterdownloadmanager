@@ -16,14 +16,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use jni::EnvUnowned;
 use jni::JValue;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JObject, JString};
-use jni::refs::{Global, Reference};
+use jni::refs::Global;
 use jni::strings::JNIString;
 use jni::sys::{jint, jlong};
 use jni::vm::JavaVM;
-use jni::EnvUnowned;
 use mdm_engine::download::{Destination, Download, Options, Request, Snapshot, State};
 use reqwest::header::HeaderMap;
 use serde_json::json;
@@ -46,7 +46,8 @@ struct Entry {
 
 struct StateStore {
     downloads: HashMap<i64, Arc<Mutex<Entry>>>,
-    callback: Option<Global<JObject<'static>>>,
+    // `Global` is not Clone; an Arc lets worker threads keep the callback alive.
+    callback: Option<Arc<Global<JObject<'static>>>>,
 }
 
 struct AndroidEngine {
@@ -118,7 +119,13 @@ impl AndroidEngine {
         // Replacing a live entry (a restore with the same id) stops its old
         // monitor. `Arc::ptr_eq` in `monitor` keeps the old task from touching
         // the replacement.
-        if let Some(old) = self.store.lock().unwrap().downloads.insert(id, entry.clone()) {
+        if let Some(old) = self
+            .store
+            .lock()
+            .unwrap()
+            .downloads
+            .insert(id, entry.clone())
+        {
             old.lock().unwrap().download.cancel();
         }
 
@@ -151,7 +158,7 @@ fn state_name(state: State) -> &'static str {
     }
 }
 
-fn callback_of(store: &Mutex<StateStore>) -> Option<Global<JObject<'static>>> {
+fn callback_of(store: &Mutex<StateStore>) -> Option<Arc<Global<JObject<'static>>>> {
     store.lock().unwrap().callback.clone()
 }
 
@@ -164,7 +171,7 @@ fn emit_progress(vm: &JavaVM, store: &Mutex<StateStore>, id: i64, snap: &Snapsho
     let _ = vm.attach_current_thread(move |env| -> jni::errors::Result<()> {
         let name = env.new_string(name)?;
         env.call_method(
-            &cb,
+            cb.as_ref(),
             jni::jni_str!("onProgress"),
             jni::jni_sig!((jlong, jlong, jlong, java.lang.String) -> void),
             &[
@@ -178,12 +185,18 @@ fn emit_progress(vm: &JavaVM, store: &Mutex<StateStore>, id: i64, snap: &Snapsho
     });
 }
 
-fn emit_finished(vm: &JavaVM, cb: Global<JObject<'static>>, id: i64, path: &Path, size: u64) {
+fn emit_finished(
+    vm: &JavaVM,
+    cb: Arc<Global<JObject<'static>>>,
+    id: i64,
+    path: &Path,
+    size: u64,
+) {
     let path = path.to_string_lossy().into_owned();
     let _ = vm.attach_current_thread(move |env| -> jni::errors::Result<()> {
         let path = env.new_string(path)?;
         env.call_method(
-            &cb,
+            cb.as_ref(),
             jni::jni_str!("onFinished"),
             jni::jni_sig!((jlong, java.lang.String, jlong) -> void),
             &[
@@ -196,11 +209,11 @@ fn emit_finished(vm: &JavaVM, cb: Global<JObject<'static>>, id: i64, path: &Path
     });
 }
 
-fn emit_failed(vm: &JavaVM, cb: Global<JObject<'static>>, id: i64, message: String) {
+fn emit_failed(vm: &JavaVM, cb: Arc<Global<JObject<'static>>>, id: i64, message: String) {
     let _ = vm.attach_current_thread(move |env| -> jni::errors::Result<()> {
         let message = env.new_string(message)?;
         env.call_method(
-            &cb,
+            cb.as_ref(),
             jni::jni_str!("onFailed"),
             jni::jni_sig!((jlong, java.lang.String) -> void),
             &[JValue::Long(id as jlong), JValue::Object(&message)],
@@ -209,10 +222,10 @@ fn emit_failed(vm: &JavaVM, cb: Global<JObject<'static>>, id: i64, message: Stri
     });
 }
 
-fn emit_paused(vm: &JavaVM, cb: Global<JObject<'static>>, id: i64) {
+fn emit_paused(vm: &JavaVM, cb: Arc<Global<JObject<'static>>>, id: i64) {
     let _ = vm.attach_current_thread(move |env| -> jni::errors::Result<()> {
         env.call_method(
-            &cb,
+            cb.as_ref(),
             jni::jni_str!("onPaused"),
             jni::jni_sig!((jlong) -> void),
             &[JValue::Long(id as jlong)],
@@ -268,7 +281,9 @@ async fn monitor(
                 &vm,
                 cb,
                 id,
-                snap.error.clone().unwrap_or_else(|| "Download failed".to_owned()),
+                snap.error
+                    .clone()
+                    .unwrap_or_else(|| "Download failed".to_owned()),
             ),
             (State::Cancelled, Some(cb)) if user_paused => emit_paused(&vm, cb, id),
             _ => {}
@@ -326,7 +341,9 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeSetCallback<'caller>(
+pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeSetCallback<
+    'caller,
+>(
     mut env: EnvUnowned<'caller>,
     _this: JObject<'caller>,
     handle: jlong,
@@ -335,7 +352,7 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
     env.with_env(|env| -> jni::errors::Result<()> {
         let engine = engine_from(handle);
         let global = env.new_global_ref(callback)?;
-        engine.store.lock().unwrap().callback = Some(global);
+        engine.store.lock().unwrap().callback = Some(Arc::new(global));
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>()
@@ -368,7 +385,9 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativePause<'caller>(
+pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativePause<
+    'caller,
+>(
     mut env: EnvUnowned<'caller>,
     _this: JObject<'caller>,
     handle: jlong,
@@ -388,7 +407,9 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeResume<'caller>(
+pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeResume<
+    'caller,
+>(
     mut env: EnvUnowned<'caller>,
     _this: JObject<'caller>,
     handle: jlong,
@@ -422,7 +443,9 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeRemove<'caller>(
+pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeRemove<
+    'caller,
+>(
     mut env: EnvUnowned<'caller>,
     _this: JObject<'caller>,
     handle: jlong,
@@ -442,7 +465,9 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeSnapshot<'caller>(
+pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeSnapshot<
+    'caller,
+>(
     mut env: EnvUnowned<'caller>,
     _this: JObject<'caller>,
     handle: jlong,
@@ -473,7 +498,14 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 ) -> jni::sys::jstring {
     env.with_env(|env| -> jni::errors::Result<jni::sys::jstring> {
         let engine = engine_from(handle);
-        let entries: Vec<_> = engine.store.lock().unwrap().downloads.clone();
+        let entries: Vec<_> = engine
+            .store
+            .lock()
+            .unwrap()
+            .downloads
+            .iter()
+            .map(|(id, entry)| (*id, entry.clone()))
+            .collect();
         let mut items = Vec::new();
         for (id, entry) in entries {
             let e = entry.lock().unwrap();
@@ -487,7 +519,9 @@ pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeDestroy<'caller>(
+pub extern "system" fn Java_com_misterdownloadmanager_android_DownloadEngine_nativeDestroy<
+    'caller,
+>(
     mut env: EnvUnowned<'caller>,
     _this: JObject<'caller>,
     handle: jlong,
