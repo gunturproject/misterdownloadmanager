@@ -17,10 +17,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # v3 defaults to the legacy `tools` package, which Google no longer ships.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - name: Expose the NDK to cargo-ndk
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
