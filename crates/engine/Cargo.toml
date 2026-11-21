@@ -68,6 +68,11 @@ windows-sys.workspace = true
 [target.'cfg(all(windows, target_arch = "x86"))'.dependencies]
 rquickjs = { version = "0.14.0", default-features = false, features = ["std", "bindgen"] }
 
+# Android has no prebuilt QuickJS bindings either; PAC scripts (src/pac.rs) still
+# need the language, so generate the bindings from its C headers like Windows x86.
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "0.14.0", default-features = false, features = ["std", "bindgen"] }
+
 [target.'cfg(unix)'.dependencies]
 # The free-space probe (src/disk.rs): statvfs and statfs, safely (already in the tree).
 rustix = { version = "1.1.6", features = ["fs"] }

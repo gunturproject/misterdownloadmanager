@@ -35,6 +35,10 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      # rquickjs-sys generates QuickJS bindings from C headers on Android.
+      - name: Install libclang for bindgen
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
       # Cargo.lock is refreshed here on purpose: mdm-android is a new member.
       - name: Build native libraries
         run: >-
